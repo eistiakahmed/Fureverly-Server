@@ -4,7 +4,7 @@ require('dotenv').config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 
 const app = express();
-const port = process.env.PORT || 3000; 
+const port = process.env.PORT || 3000;
 
 // middleware
 app.use(cors());
@@ -32,6 +32,7 @@ async function run() {
 
     const db = client.db('fureverlyDB');
     const petCollection = db.collection('petCollection');
+    const orderCollection = db.collection('orderCollection');
 
     // Latest listing (6 items)
     app.get('/latestListing', async (req, res) => {
@@ -57,13 +58,13 @@ async function run() {
       res.send(result);
     });
 
-    app.post('/product', async(req, res) => { 
-      const newProduct = req.body
-      const result = await petCollection.insertOne(newProduct)
-      res.send(result)
+    app.post('/product', async (req, res) => {
+      const newProduct = req.body;
+      const result = await petCollection.insertOne(newProduct);
+      res.send(result);
     });
 
-    //  Category wise filter 
+    //  Category wise filter
     app.get('/products', async (req, res) => {
       const category = req.query.category;
       let query = {};
@@ -74,16 +75,63 @@ async function run() {
       const result = await petCollection.find(query).toArray();
       res.send(result);
     });
+ 
+    // Update Method
+    app.put('/product/:id', async (req, res) => {
+      const id = req.params.id;
+      const data = req.body;
+      const filter = { _id: new ObjectId(id) };
+      const update = {
+        $set: data,
+      };
 
-    
-    await client.db('admin').command({ ping: 1 });
+      const result = await petCollection.updateOne(filter, update);
+      res.send(result);
+    });
+
+    app.delete('/product/:id', async(req,res) => { 
+      const id = req.params.id
+      const result = await petCollection.deleteOne({_id: new ObjectId(id)})
+      res.send(result)
+    })
+
+    // Search Method
+    app.get('/search', async (req, res) => {
+      const search_text = req.query.search;
+      const result = await petCollection
+        .find({ category: { $regex: search_text, $options: 'i' } })
+        .toArray();
+      res.send(result);
+    });
+
+     
+    // Find by Email
+    app.get('/myListing', async (req, res) => {
+      const email = req.query.email;
+      const result = await petCollection.find({ email: email }).toArray();
+      res.send(result);
+    });
+
+    // Order 
+    app.get('/orders', async (req, res) => {
+      const result = await orderCollection.find().toArray();
+      res.send(result);
+    });
+
+    // Order Post 
+    app.post('/orders', async (req, res) => {
+      const newOrder = req.body;
+      const result = await orderCollection.insertOne(newOrder);
+      res.send(result);
+    });
+
+    // await client.db('admin').command({ ping: 1 });
     console.log(' MongoDB Connected Successfully!');
   } finally {
-    // await client.close();  
+    // await client.close();
   }
 }
 run().catch(console.dir);
-
 
 app.listen(port, () => {
   console.log(` Fureverly ServerDB is running on port: ${port}`);
