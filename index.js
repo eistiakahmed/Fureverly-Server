@@ -96,7 +96,7 @@ async function run() {
     })
 
     // Search Method
-    app.get('/search', async (req, res) => {
+    app.get('/filterCategory', async (req, res) => {
       const search_text = req.query.search;
       const result = await petCollection
         .find({ category: { $regex: search_text, $options: 'i' } })
