@@ -28,7 +28,7 @@ app.get('/', (req, res) => {
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
 
     const db = client.db('fureverlyDB');
     const petCollection = db.collection('petCollection');
@@ -103,6 +103,16 @@ async function run() {
         .toArray();
       res.send(result);
     });
+
+    app.get('/searchName', async (req, res) => {
+      const search_text = req.query.search;
+      const result = await petCollection
+        .find({ name: { $regex: search_text, $options: 'i' } })
+        .toArray();
+      res.send(result);
+    });
+
+
 
      
     // Find by Email
