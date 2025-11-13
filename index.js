@@ -82,7 +82,7 @@ async function run() {
     // Category filter
     app.get('/products', async (req, res) => {
       const category = req.query.category;
-      const query = category ? { category } : {};
+      const query = { category: category };
       const result = await petCollection.find(query).toArray();
       res.send(result);
     });
@@ -108,21 +108,22 @@ async function run() {
     });
 
     app.get('/myListing', async (req, res) => {
-      const email = req.user.email;
-      const result = await petCollection.find({ email }).toArray();
+      const email = req.query.email;
+      const result = await petCollection.find({ email: email }).toArray();
+      console.log(result)
       res.send(result);
     });
 
     app.get('/orders', async (req, res) => {
       const email = req.query.email;
-      const query = email ? { email } : {};
+      const query = { email: email };
       const result = await orderCollection.find(query).toArray();
       res.send(result);
     });
 
     app.post('/orders', async (req, res) => {
       const newOrder = req.body;
-      newOrder.email = req.user.email;
+      // newOrder.email = req.user.email;
       const result = await orderCollection.insertOne(newOrder);
       res.send(result);
     });
