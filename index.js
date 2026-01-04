@@ -1,18 +1,24 @@
 const express = require('express');
 const cors = require('cors');
-const admin = require('firebase-admin');
-
 require('dotenv').config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const admin = require('firebase-admin');
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Middleware
+/* ================= MIDDLEWARE ================= */
 app.use(cors());
 app.use(express.json());
 
-// MongoDB URI
+/* ================= FIREBASE ADMIN ================= */
+const serviceAccount = require('./fureverly_adminsdk.json');
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+/* ================= MONGODB ================= */
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@fureverlydb.o2jukph.mongodb.net/?appName=fureverlyDB`;
 
 const client = new MongoClient(uri, {
@@ -23,119 +29,277 @@ const client = new MongoClient(uri, {
   },
 });
 
+let petCollection, orderCollection, userCollection;
+
+/* ================= FIREBASE AUTH ================= */
+const verifyFirebaseToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ message: 'Unauthorized' });
+
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.user = decoded;
+    next();
+  } catch {
+    res.status(403).json({ message: 'Invalid Firebase token' });
+  }
+};
+
+/* ================= ADMIN CHECK ================= */
+const verifyAdmin = async (req, res, next) => {
+  const user = await userCollection.findOne({ email: req.user.email });
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ message: 'Admin access required' });
+  }
+  next();
+};
+
+/* ================= ROOT ================= */
 app.get('/', (req, res) => {
-  res.send('Fureverly Server is running...');
+  res.send('Fureverly Server running with Firebase Auth');
 });
 
+/* ================= MAIN ================= */
 async function run() {
   try {
-    // await client.connect();
+    await client.connect();
     const db = client.db('fureverlyDB');
-    const petCollection = db.collection('petCollection');
-    const orderCollection = db.collection('orderCollection');
 
-    // Latest listing (6 items)
-    app.get('/latestListing', async (req, res) => {
-      const result = await petCollection
-        .find()
-        .sort({ date: -1 })
-        .limit(6)
-        .toArray();
-      res.send(result);
+    petCollection = db.collection('petCollection');
+    orderCollection = db.collection('orderCollection');
+    userCollection = db.collection('userCollection');
+
+    console.log('MongoDB connected');
+
+    /* ================= USER SAVE ================= */
+    app.post('/users', verifyFirebaseToken, async (req, res) => {
+      const email = req.user.email;
+      const { name, photoURL } = req.body;
+
+      const exists = await userCollection.findOne({ email });
+      if (exists) return res.json({ message: 'User already exists' });
+
+      await userCollection.insertOne({
+        name: name || '',
+        email,
+        profileImage: photoURL || '',
+        role: 'user',
+        isActive: true,
+        createdAt: new Date(),
+      });
+
+      res.status(201).json({ message: 'User saved' });
     });
 
-    // All products
-    app.get('/product', async (req, res) => {
-      const result = await petCollection.find().toArray();
-      res.send(result);
+    /* ================= USER ROLE (SELF) ================= */
+    app.get('/user/role', verifyFirebaseToken, async (req, res) => {
+      const user = await userCollection.findOne({ email: req.user.email });
+      if (!user) return res.status(404).json({ message: 'User not found' });
+      res.json({ role: user.role });
     });
 
-    // Single product by ID
-    app.get('/product/:id', async (req, res) => {
-      const id = req.params.id;
-      const result = await petCollection.findOne({ _id: new ObjectId(id) });
-      res.send(result);
+    /* ================= USER PROFILE ================= */
+    app.get('/user/profile', verifyFirebaseToken, async (req, res) => {
+      const user = await userCollection.findOne({ email: req.user.email });
+      if (!user) return res.status(404).json({ message: 'User not found' });
+      res.json(user);
     });
 
-    app.post('/product', async (req, res) => {
-      const newProduct = req.body;
-      const result = await petCollection.insertOne(newProduct);
-      res.send(result);
-    });
+    app.put('/user/profile', verifyFirebaseToken, async (req, res) => {
+      const { name, profileImage, phone, address } = req.body;
 
-    app.put('/product/:id', async (req, res) => {
-      const id = req.params.id;
-      const data = req.body;
-      const result = await petCollection.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: data }
+      await userCollection.updateOne(
+        { email: req.user.email },
+        {
+          $set: {
+            name,
+            profileImage,
+            phone,
+            address,
+            updatedAt: new Date(),
+          },
+        }
       );
-      res.send(result);
+
+      res.json({ message: 'Profile updated successfully' });
     });
 
-    app.delete('/product/:id', async (req, res) => {
-      const id = req.params.id;
-      const result = await petCollection.deleteOne({ _id: new ObjectId(id) });
-      res.send(result);
+    /* ================= USER ROLE MANAGEMENT (ADMIN USE) ================= */
+    app.get('/users/:email', verifyFirebaseToken, async (req, res) => {
+      const { email } = req.params;
+      const user = await userCollection.findOne({ email });
+      if (!user) return res.status(404).json({ message: 'User not found' });
+
+      res.json({
+        role: user.role,
+        isActive: user.isActive,
+      });
     });
 
-    // Category filter
+    app.patch(
+      '/admin/users/:email/role',
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { email } = req.params;
+        const { role } = req.body;
+
+        if (!['user', 'admin'].includes(role)) {
+          return res.status(400).json({ message: 'Invalid role' });
+        }
+
+        await userCollection.updateOne(
+          { email },
+          { $set: { role, updatedAt: new Date() } }
+        );
+
+        res.json({ message: 'Role updated successfully' });
+      }
+    );
+
+    /* ================= PRODUCTS ================= */
     app.get('/products', async (req, res) => {
-      const category = req.query.category;
-      const query = { category: category };
-      const result = await petCollection.find(query).toArray();
-      res.send(result);
+      res.json(await petCollection.find().toArray());
     });
 
-    // Search by category
-    app.get('/filterCategory', async (req, res) => {
-      const search_text = req.query.search;
-      const query = search_text
-        ? { category: { $regex: search_text, $options: 'i' } }
-        : {};
-      const result = await petCollection.find(query).toArray();
-      res.send(result);
+    app.get('/products/latest', async (req, res) => {
+      res.json(
+        await petCollection.find().sort({ createdAt: -1 }).limit(6).toArray()
+      );
     });
 
-    // Search by name
-    app.get('/searchName', async (req, res) => {
-      const search_text = req.query.search;
-      const query = search_text
-        ? { name: { $regex: search_text, $options: 'i' } }
-        : {};
-      const result = await petCollection.find(query).toArray();
-      res.send(result);
+    app.post('/products', verifyFirebaseToken, async (req, res) => {
+      const product = {
+        ...req.body,
+        email: req.user.email,
+        createdBy: req.user.uid,
+        status: 'Available',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      res.status(201).json(await petCollection.insertOne(product));
     });
 
-    app.get('/myListing', async (req, res) => {
-      const email = req.query.email;
-      const result = await petCollection.find({ email: email }).toArray();
-      console.log(result)
-      res.send(result);
+    app.put('/products/:id', verifyFirebaseToken, async (req, res) => {
+      const { id } = req.params;
+      if (!ObjectId.isValid(id))
+        return res.status(400).json({ message: 'Invalid ID' });
+
+      const product = await petCollection.findOne({ _id: new ObjectId(id) });
+      if (!product) return res.status(404).json({ message: 'Not found' });
+      if (product.email !== req.user.email)
+        return res.status(403).json({ message: 'Forbidden' });
+
+      await petCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { ...req.body, updatedAt: new Date() } }
+      );
+
+      res.json({ message: 'Updated' });
     });
 
-    app.get('/orders', async (req, res) => {
-      const email = req.query.email;
-      const query = { email: email };
-      const result = await orderCollection.find(query).toArray();
-      res.send(result);
+    app.delete('/products/:id', verifyFirebaseToken, async (req, res) => {
+      const product = await petCollection.findOne({
+        _id: new ObjectId(req.params.id),
+      });
+
+      if (!product) return res.status(404).json({ message: 'Not found' });
+      if (product.email !== req.user.email)
+        return res.status(403).json({ message: 'Forbidden' });
+
+      await petCollection.deleteOne({ _id: product._id });
+      res.json({ message: 'Deleted' });
     });
 
-    app.post('/orders', async (req, res) => {
-      const newOrder = req.body;
-      // newOrder.email = req.user.email;
-      const result = await orderCollection.insertOne(newOrder);
-      res.send(result);
+    /* ================= ORDERS ================= */
+    app.post('/orders', verifyFirebaseToken, async (req, res) => {
+      const order = {
+        ...req.body,
+        email: req.user.email,
+        status: 'Pending',
+        createdAt: new Date(),
+      };
+
+      res.status(201).json(await orderCollection.insertOne(order));
     });
 
-    console.log('MongoDB Connected Successfully!');
-  } finally {
-    // await client.close();
+    app.get('/orders', verifyFirebaseToken, async (req, res) => {
+      res.json(await orderCollection.find({ email: req.user.email }).toArray());
+    });
+
+    /* ================= DASHBOARD STATS ================= */
+    app.get('/dashboard/stats', verifyFirebaseToken, async (req, res) => {
+      const user = await userCollection.findOne({ email: req.user.email });
+
+      if (user.role === 'admin') {
+        res.json({
+          totalUsers: await userCollection.countDocuments(),
+          totalProducts: await petCollection.countDocuments(),
+          totalOrders: await orderCollection.countDocuments(),
+          pendingOrders: await orderCollection.countDocuments({
+            status: 'Pending',
+          }),
+        });
+      } else {
+        res.json({
+          userProducts: await petCollection.countDocuments({
+            email: req.user.email,
+          }),
+          userOrders: await orderCollection.countDocuments({
+            email: req.user.email,
+          }),
+          pendingOrders: await orderCollection.countDocuments({
+            email: req.user.email,
+            status: 'Pending',
+          }),
+        });
+      }
+    });
+
+    /* ================= ADMIN STATISTICS ================= */
+    app.get(
+      '/admin/stats',
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        res.json({
+          totalUsers: await userCollection.countDocuments(),
+          totalProducts: await petCollection.countDocuments(),
+          totalOrders: await orderCollection.countDocuments(),
+          activeProducts: await petCollection.countDocuments({
+            status: 'Available',
+          }),
+        });
+      }
+    );
+
+    /* ================= ADMIN LIST ================= */
+    app.get(
+      '/admin/users',
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        res.json(await userCollection.find().toArray());
+      }
+    );
+
+    app.get(
+      '/admin/orders',
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        res.json(await orderCollection.find().toArray());
+      }
+    );
+  } catch (error) {
+    console.error(error);
   }
 }
 
-run().catch(console.dir);
+run();
 
 app.listen(port, () => {
-  console.log(`Fureverly Server is running on port: ${port}`);
+  console.log(`Server running on port ${port}`);
 });
