@@ -12,7 +12,11 @@ app.use(cors());
 app.use(express.json());
 
 /* ================= FIREBASE ADMIN ================= */
-const serviceAccount = require('./fureverly_adminsdk.json');
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString(
+  'utf8'
+);
+const serviceAccount = JSON.parse(decoded);
+// const serviceAccount = require('./fureverly_adminsdk.json');
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
