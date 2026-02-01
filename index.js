@@ -33,8 +33,6 @@ const client = new MongoClient(uri, {
   },
 });
 
-let petCollection, orderCollection, userCollection;
-
 /* ================= FIREBASE AUTH ================= */
 const verifyFirebaseToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -50,15 +48,6 @@ const verifyFirebaseToken = async (req, res, next) => {
   }
 };
 
-/* ================= ADMIN CHECK ================= */
-const verifyAdmin = async (req, res, next) => {
-  const user = await userCollection.findOne({ email: req.user.email });
-  if (!user || user.role !== 'admin') {
-    return res.status(403).json({ message: 'Admin access required' });
-  }
-  next();
-};
-
 /* ================= ROOT ================= */
 app.get('/', (req, res) => {
   res.send('Fureverly Server running with Firebase Auth');
@@ -67,14 +56,25 @@ app.get('/', (req, res) => {
 /* ================= MAIN ================= */
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
     const db = client.db('fureverlyDB');
 
-    petCollection = db.collection('petCollection');
-    orderCollection = db.collection('orderCollection');
-    userCollection = db.collection('userCollection');
+    const petCollection = db.collection('petCollection');
+    const orderCollection = db.collection('orderCollection');
+    const userCollection = db.collection('userCollection');
 
     console.log('MongoDB connected');
+
+    /* ================= ADMIN CHECK Middleware ================= */
+    const verifyAdmin = async (req, res, next) => {
+      const user = await userCollection.findOne({ email: req.user.email });
+      if (!user || user.role !== 'admin') {
+        return res.status(403).json({ message: 'Admin access required' });
+      }
+      next();
+    };
+
+    
 
     /* ================= USER SAVE ================= */
     app.post('/users', verifyFirebaseToken, async (req, res) => {
@@ -167,6 +167,13 @@ async function run() {
       res.json(await petCollection.find().toArray());
     });
 
+    app.get('/myListing', verifyFirebaseToken, async (req, res) => {
+      const result = await petCollection
+        .find({ email: req.user.email })
+        .toArray();
+      res.send(result);
+    });
+
     app.get('/products/latest', async (req, res) => {
       res.json(
         await petCollection.find().sort({ createdAt: -1 }).limit(6).toArray()
@@ -217,6 +224,23 @@ async function run() {
       res.json({ message: 'Deleted' });
     });
 
+    /* ================= PRODUCT DETAILS ================= */
+    app.get('/product/:id', async (req, res) => {
+      const { id } = req.params;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: 'Invalid product ID' });
+      }
+
+      const product = await petCollection.findOne({ _id: new ObjectId(id) });
+
+      if (!product) {
+        return res.status(404).json({ message: 'Product not found' });
+      }
+
+      res.json(product);
+    });
+
     /* ================= ORDERS ================= */
     app.post('/orders', verifyFirebaseToken, async (req, res) => {
       const order = {
@@ -230,7 +254,10 @@ async function run() {
     });
 
     app.get('/orders', verifyFirebaseToken, async (req, res) => {
-      res.json(await orderCollection.find({ email: req.user.email }).toArray());
+      const result = await orderCollection
+        .find({ email: req.user.email })
+        .toArray();
+      res.send(result);
     });
 
     /* ================= DASHBOARD STATS ================= */
